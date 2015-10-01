@@ -15,6 +15,9 @@
  */
 package org.springframework.hateoas;
 
+import static org.springframework.hateoas.TemplateVariable.VariableType.*;
+
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -22,6 +25,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
+import org.springframework.hateoas.TemplateVariable.VariableType;
 import org.springframework.util.Assert;
 
 /**
@@ -29,9 +33,10 @@ import org.springframework.util.Assert;
  * 
  * @author Oliver Gierke
  */
-public final class TemplateVariables implements Iterable<TemplateVariable> {
+public final class TemplateVariables implements Iterable<TemplateVariable>, Serializable {
 
 	public static TemplateVariables NONE = new TemplateVariables();
+	private static final long serialVersionUID = -7736592281223783079L;
 
 	private final List<TemplateVariable> variables;
 
@@ -75,7 +80,12 @@ public final class TemplateVariables implements Iterable<TemplateVariable> {
 
 		List<TemplateVariable> result = new ArrayList<TemplateVariable>(this.variables.size() + variables.size());
 		result.addAll(this.variables);
-		result.addAll(variables);
+
+		for (TemplateVariable variable : variables) {
+			if (!containsEquivalentFor(variable)) {
+				result.add(variable);
+			}
+		}
 
 		return new TemplateVariables(result);
 	}
@@ -99,6 +109,17 @@ public final class TemplateVariables implements Iterable<TemplateVariable> {
 		return this.variables;
 	}
 
+	private boolean containsEquivalentFor(TemplateVariable candidate) {
+
+		for (TemplateVariable variable : this.variables) {
+			if (variable.isEquivalent(candidate)) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	/* 
 	 * (non-Javadoc)
 	 * @see java.lang.Iterable#iterator()
@@ -112,7 +133,18 @@ public final class TemplateVariables implements Iterable<TemplateVariable> {
 	 * (non-Javadoc)
 	 * @see java.lang.Object#toString()
 	 */
+	@Override
 	public String toString() {
+		return toString(false);
+	}
+
+	/**
+	 * Returns the string representation of the template but forcing a continued style of expressing request parameters.
+	 * 
+	 * @param appended
+	 * @return
+	 */
+	String toString(boolean appended) {
 
 		if (variables.isEmpty()) {
 			return "";
@@ -123,10 +155,13 @@ public final class TemplateVariables implements Iterable<TemplateVariable> {
 
 		for (TemplateVariable variable : variables) {
 
+			VariableType type = variable.getType();
+			type = appended && type.equals(REQUEST_PARAM) ? REQUEST_PARAM_CONTINUED : type;
+
 			if (previous == null) {
-				builder.append("{").append(variable.getType().toString());
+				builder.append("{").append(type.toString());
 			} else if (!previous.isCombinable(variable)) {
-				builder.append("}{").append(variable.getType().toString());
+				builder.append("}{").append(type.toString());
 			} else {
 				builder.append(",");
 			}

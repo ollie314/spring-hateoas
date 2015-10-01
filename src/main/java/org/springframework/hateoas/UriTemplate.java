@@ -1,5 +1,5 @@
 /*
- * Copyright 2014 the original author or authors.
+ * Copyright 2014-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 package org.springframework.hateoas;
 
+import java.io.Serializable;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -27,6 +28,7 @@ import java.util.regex.Pattern;
 import org.springframework.hateoas.TemplateVariable.VariableType;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
+import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
 
 /**
@@ -36,9 +38,10 @@ import org.springframework.web.util.UriComponentsBuilder;
  * @see http://tools.ietf.org/html/rfc6570
  * @since 0.9
  */
-public class UriTemplate implements Iterable<TemplateVariable> {
+public class UriTemplate implements Iterable<TemplateVariable>, Serializable {
 
 	private static final Pattern VARIABLE_REGEX = Pattern.compile("\\{([\\?\\&#/]?)([\\w\\,]+)\\}");
+	private static final long serialVersionUID = -1007874653930162262L;
 
 	private final TemplateVariables variables;;
 	private String baseUri;
@@ -86,7 +89,7 @@ public class UriTemplate implements Iterable<TemplateVariable> {
 	 */
 	public UriTemplate(String baseUri, TemplateVariables variables) {
 
-		Assert.hasText("Base URI must not be null or empty!");
+		Assert.hasText(baseUri, "Base URI must not be null or empty!");
 
 		this.baseUri = baseUri;
 		this.variables = variables == null ? TemplateVariables.NONE : variables;
@@ -96,7 +99,7 @@ public class UriTemplate implements Iterable<TemplateVariable> {
 	 * Creates a new {@link UriTemplate} with the current {@link TemplateVariable}s augmented with the given ones.
 	 * 
 	 * @param variables can be {@literal null}.
-	 * @return
+	 * @return will never be {@literal null}.
 	 */
 	public UriTemplate with(TemplateVariables variables) {
 
@@ -104,7 +107,37 @@ public class UriTemplate implements Iterable<TemplateVariable> {
 			return this;
 		}
 
-		return new UriTemplate(baseUri, this.variables.concat(variables));
+		UriComponents components = UriComponentsBuilder.fromUriString(baseUri).build();
+		List<TemplateVariable> result = new ArrayList<TemplateVariable>();
+
+		for (TemplateVariable variable : variables) {
+
+			boolean isRequestParam = variable.isRequestParameterVariable();
+			boolean alreadyPresent = components.getQueryParams().containsKey(variable.getName());
+
+			if (isRequestParam && alreadyPresent) {
+				continue;
+			}
+
+			if (variable.isFragment() && StringUtils.hasText(components.getFragment())) {
+				continue;
+			}
+
+			result.add(variable);
+		}
+
+		return new UriTemplate(baseUri, this.variables.concat(result));
+	}
+
+	/**
+	 * Creates a new {@link UriTemplate} with a {@link TemplateVariable} with the given name and type added.
+	 * 
+	 * @param variableName must not be {@literal null} or empty.
+	 * @param type must not be {@literal null}.
+	 * @return will never be {@literal null}.
+	 */
+	public UriTemplate with(String variableName, TemplateVariable.VariableType type) {
+		return with(new TemplateVariables(new TemplateVariable(variableName, type)));
 	}
 
 	/**
@@ -161,10 +194,11 @@ public class UriTemplate implements Iterable<TemplateVariable> {
 			return URI.create(baseUri);
 		}
 
-		UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(baseUri);
+		org.springframework.web.util.UriTemplate baseTemplate = new org.springframework.web.util.UriTemplate(baseUri);
+		UriComponentsBuilder builder = UriComponentsBuilder.fromUri(baseTemplate.expand(parameters));
 		Iterator<Object> iterator = Arrays.asList(parameters).iterator();
 
-		for (TemplateVariable variable : variables) {
+		for (TemplateVariable variable : getOptionalVariables()) {
 
 			Object value = iterator.hasNext() ? iterator.next() : null;
 			appendToBuilder(builder, variable, value);
@@ -179,16 +213,18 @@ public class UriTemplate implements Iterable<TemplateVariable> {
 	 * @param parameters must not be {@literal null}.
 	 * @return
 	 */
-	public URI expand(Map<String, Object> parameters) {
+	public URI expand(Map<String, ? extends Object> parameters) {
 
 		if (TemplateVariables.NONE.equals(variables)) {
 			return URI.create(baseUri);
 		}
 
 		Assert.notNull(parameters, "Parameters must not be null!");
-		UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(baseUri);
 
-		for (TemplateVariable variable : variables) {
+		org.springframework.web.util.UriTemplate baseTemplate = new org.springframework.web.util.UriTemplate(baseUri);
+		UriComponentsBuilder builder = UriComponentsBuilder.fromUri(baseTemplate.expand(parameters));
+
+		for (TemplateVariable variable : getOptionalVariables()) {
 			appendToBuilder(builder, variable, parameters.get(variable.getName()));
 		}
 
@@ -210,7 +246,11 @@ public class UriTemplate implements Iterable<TemplateVariable> {
 	 */
 	@Override
 	public String toString() {
-		return baseUri + getOptionalVariables().toString();
+
+		UriComponents components = UriComponentsBuilder.fromUriString(baseUri).build();
+		boolean hasQueryParameters = !components.getQueryParams().isEmpty();
+
+		return baseUri + getOptionalVariables().toString(hasQueryParameters);
 	}
 
 	private TemplateVariables getOptionalVariables() {

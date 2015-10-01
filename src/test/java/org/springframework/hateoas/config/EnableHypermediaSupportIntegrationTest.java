@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 the original author or authors.
+ * Copyright 2013-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,9 @@ package org.springframework.hateoas.config;
 import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.*;
 
+import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 
 import org.hamcrest.Matchers;
@@ -36,15 +38,23 @@ import org.springframework.hateoas.LinkDiscoverers;
 import org.springframework.hateoas.MediaTypes;
 import org.springframework.hateoas.RelProvider;
 import org.springframework.hateoas.config.EnableHypermediaSupport.HypermediaType;
+import org.springframework.hateoas.config.HypermediaSupportBeanDefinitionRegistrar.Jackson2ModuleRegisteringBeanPostProcessor;
 import org.springframework.hateoas.core.DelegatingEntityLinks;
 import org.springframework.hateoas.core.DelegatingRelProvider;
 import org.springframework.hateoas.hal.HalLinkDiscoverer;
+import org.springframework.hateoas.mvc.TypeConstrainedMappingJackson2HttpMessageConverter;
 import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
-import org.springframework.http.converter.json.MappingJacksonHttpMessageConverter;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.util.ReflectionUtils;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.method.support.HandlerMethodArgumentResolver;
+import org.springframework.web.method.support.HandlerMethodArgumentResolverComposite;
 import org.springframework.web.servlet.mvc.annotation.AnnotationMethodHandlerAdapter;
+import org.springframework.web.servlet.mvc.method.annotation.AbstractMessageConverterMethodArgumentResolver;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -73,8 +83,70 @@ public class EnableHypermediaSupportIntegrationTest {
 	}
 
 	@Test
-	public void foo() {
+	public void bootstrapsHalConfigurationForSubclass() {
 		assertHalSetupForConfigClass(ExtendedHalConfig.class);
+	}
+
+	/**
+	 * @see #134, #219
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void halSetupIsAppliedToAllTransitiveComponentsInRequestMappingHandlerAdapter() {
+
+		AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(HalConfig.class);
+
+		Jackson2ModuleRegisteringBeanPostProcessor postProcessor = new HypermediaSupportBeanDefinitionRegistrar.Jackson2ModuleRegisteringBeanPostProcessor();
+		postProcessor.setBeanFactory(context);
+
+		RequestMappingHandlerAdapter adapter = context.getBean(RequestMappingHandlerAdapter.class);
+
+		assertThat(adapter.getMessageConverters().get(0).getSupportedMediaTypes(), hasItem(MediaTypes.HAL_JSON));
+
+		boolean found = false;
+
+		for (HandlerMethodArgumentResolver resolver : getResolvers(adapter)) {
+
+			if (resolver instanceof AbstractMessageConverterMethodArgumentResolver) {
+
+				found = true;
+
+				AbstractMessageConverterMethodArgumentResolver processor = (AbstractMessageConverterMethodArgumentResolver) resolver;
+				List<HttpMessageConverter<?>> converters = (List<HttpMessageConverter<?>>) ReflectionTestUtils.getField(
+						processor, "messageConverters");
+
+				assertThat(converters.get(0), is(instanceOf(TypeConstrainedMappingJackson2HttpMessageConverter.class)));
+				assertThat(converters.get(0).getSupportedMediaTypes(), hasItem(MediaTypes.HAL_JSON));
+			}
+		}
+
+		assertThat(found, is(true));
+	}
+
+	/**
+	 * @see #293
+	 */
+	@Test
+	public void registersHttpMessageConvertersForRestTemplate() {
+
+		AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(HalConfig.class);
+		RestTemplate template = context.getBean(RestTemplate.class);
+
+		assertThat(template.getMessageConverters().get(0).getSupportedMediaTypes(), hasItem(MediaTypes.HAL_JSON));
+		context.close();
+	}
+
+	/**
+	 * @see #341
+	 */
+	@Test
+	public void configuresDefaultObjectMapperForHalToIgnoreUnknownProperties() {
+
+		AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(HalConfig.class);
+		ObjectMapper mapper = context.getBean("_halObjectMapper", ObjectMapper.class);
+
+		assertThat(mapper.isEnabled(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES), is(false));
+		context.close();
 	}
 
 	private static void assertEntityLinksSetUp(ApplicationContext context) {
@@ -98,12 +170,35 @@ public class EnableHypermediaSupportIntegrationTest {
 		assertThat(context.getBean(ObjectMapper.class), is(notNullValue()));
 
 		RequestMappingHandlerAdapter rmha = context.getBean(RequestMappingHandlerAdapter.class);
-		assertThat(rmha.getMessageConverters(), Matchers.<HttpMessageConverter<?>> hasItems(
-				instanceOf(MappingJackson2HttpMessageConverter.class), instanceOf(MappingJacksonHttpMessageConverter.class)));
+		assertThat(rmha.getMessageConverters(),
+				Matchers.<HttpMessageConverter<?>> hasItems(instanceOf(MappingJackson2HttpMessageConverter.class)));
 
 		AnnotationMethodHandlerAdapter amha = context.getBean(AnnotationMethodHandlerAdapter.class);
-		assertThat(Arrays.asList(amha.getMessageConverters()), Matchers.<HttpMessageConverter<?>> hasItems(
-				instanceOf(MappingJackson2HttpMessageConverter.class), instanceOf(MappingJacksonHttpMessageConverter.class)));
+		assertThat(Arrays.asList(amha.getMessageConverters()),
+				Matchers.<HttpMessageConverter<?>> hasItems(instanceOf(MappingJackson2HttpMessageConverter.class)));
+	}
+
+	/**
+	 * Method to mitigate API changes between Spring 3.2 and 4.0.
+	 * 
+	 * @param adapter
+	 * @return
+	 */
+	@SuppressWarnings("unchecked")
+	private static List<HandlerMethodArgumentResolver> getResolvers(RequestMappingHandlerAdapter adapter) {
+
+		Method method = ReflectionUtils.findMethod(RequestMappingHandlerAdapter.class, "getArgumentResolvers");
+		Object result = ReflectionUtils.invokeMethod(method, adapter);
+
+		if (result instanceof List) {
+			return (List<HandlerMethodArgumentResolver>) result;
+		}
+
+		if (result instanceof HandlerMethodArgumentResolverComposite) {
+			return ((HandlerMethodArgumentResolverComposite) result).getResolvers();
+		}
+
+		throw new IllegalStateException("Unexpected result when looking up argument resolvers!");
 	}
 
 	@Configuration
@@ -125,6 +220,11 @@ public class EnableHypermediaSupportIntegrationTest {
 			AnnotationMethodHandlerAdapter adapter = new AnnotationMethodHandlerAdapter();
 			numberOfMessageConvertersLegacy = adapter.getMessageConverters().length;
 			return adapter;
+		}
+
+		@Bean
+		public RestTemplate restTemplate() {
+			return new RestTemplate();
 		}
 	}
 

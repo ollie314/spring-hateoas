@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 the original author or authors.
+ * Copyright 2014 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,30 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.springframework.hateoas.core;
+package org.springframework.hateoas.alps;
 
-import org.springframework.hateoas.Resource;
+import lombok.Value;
+import lombok.experimental.Builder;
 
 /**
- * Simple helper class.
+ * A value object for an ALPS ext element.
  * 
  * @author Oliver Gierke
+ * @since 0.15
+ * @see http://alps.io/spec/#prop-ext
  */
-public class ObjectUtils {
+@Value
+@Builder
+public class Ext {
 
-	/**
-	 * Returns the resource type of the given object. In case a {@link Resource} is given, it will return the
-	 * {@link Resource} content's type.
-	 * 
-	 * @param object can be {@literal null}.
-	 * @return
-	 */
-	public static Object getResourceType(Object object) {
-
-		if (object instanceof Resource) {
-			return ((Resource<?>) object).getContent();
-		}
-
-		return object;
-	}
+	private final String href;
+	private final String value;
 }

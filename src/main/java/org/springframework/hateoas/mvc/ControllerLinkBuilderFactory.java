@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2013 the original author or authors.
+ * Copyright 2012-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,9 +37,11 @@ import org.springframework.hateoas.core.MappingDiscoverer;
 import org.springframework.hateoas.core.MethodParameters;
 import org.springframework.hateoas.mvc.AnnotatedParametersParameterAccessor.BoundMethodParameter;
 import org.springframework.util.Assert;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ValueConstants;
 import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.util.UriTemplate;
@@ -50,6 +52,9 @@ import org.springframework.web.util.UriTemplate;
  * @author Ricardo Gladwell
  * @author Oliver Gierke
  * @author Dietrich Schulten
+ * @author Kamill Sokol
+ * @author Ross Turner
+ * @author Oemer Yildiz
  */
 public class ControllerLinkBuilderFactory implements MethodLinkBuilderFactory<ControllerLinkBuilder> {
 
@@ -91,6 +96,15 @@ public class ControllerLinkBuilderFactory implements MethodLinkBuilderFactory<Co
 
 	/* 
 	 * (non-Javadoc)
+	 * @see org.springframework.hateoas.MethodLinkBuilderFactory#linkTo(java.lang.Class, java.lang.reflect.Method, java.lang.Object[])
+	 */
+	@Override
+	public ControllerLinkBuilder linkTo(Class<?> controller, Method method, Object... parameters) {
+		return ControllerLinkBuilder.linkTo(controller, method, parameters);
+	}
+
+	/* 
+	 * (non-Javadoc)
 	 * @see org.springframework.hateoas.MethodLinkBuilderFactory#linkTo(java.lang.Object)
 	 */
 	@Override
@@ -103,7 +117,7 @@ public class ControllerLinkBuilderFactory implements MethodLinkBuilderFactory<Co
 		Iterator<Object> classMappingParameters = invocations.getObjectParameters();
 		Method method = invocation.getMethod();
 
-		String mapping = DISCOVERER.getMapping(method);
+		String mapping = DISCOVERER.getMapping(invocation.getTargetType(), method);
 		UriComponentsBuilder builder = ControllerLinkBuilder.getBuilder().path(mapping);
 
 		UriTemplate template = new UriTemplate(mapping);
@@ -119,21 +133,11 @@ public class ControllerLinkBuilderFactory implements MethodLinkBuilderFactory<Co
 		}
 
 		for (BoundMethodParameter parameter : REQUEST_PARAM_ACCESSOR.getBoundParameters(invocation)) {
-
-			Object value = parameter.getValue();
-			String key = parameter.getVariableName();
-
-			if (value instanceof Collection) {
-				for (Object element : (Collection<?>) value) {
-					builder.queryParam(key, element);
-				}
-			} else {
-				builder.queryParam(key, parameter.asString());
-			}
+			bindRequestParameters(builder, parameter);
 		}
 
 		UriComponents components = applyUriComponentsContributer(builder, invocation).buildAndExpand(values);
-		return new ControllerLinkBuilder(UriComponentsBuilder.fromUri(components.toUri()));
+		return new ControllerLinkBuilder(UriComponentsBuilder.fromUriString(components.toUriString()));
 	}
 
 	/* 
@@ -170,6 +174,48 @@ public class ControllerLinkBuilderFactory implements MethodLinkBuilderFactory<Co
 	}
 
 	/**
+	 * Populates the given {@link UriComponentsBuilder} with request parameters found in the given
+	 * {@link BoundMethodParameter}.
+	 * 
+	 * @param builder must not be {@literal null}.
+	 * @param parameter must not be {@literal null}.
+	 */
+	@SuppressWarnings("unchecked")
+	private static void bindRequestParameters(UriComponentsBuilder builder, BoundMethodParameter parameter) {
+
+		Object value = parameter.getValue();
+		String key = parameter.getVariableName();
+
+		if (value instanceof MultiValueMap) {
+
+			MultiValueMap<String, String> requestParams = (MultiValueMap<String, String>) value;
+
+			for (Map.Entry<String, List<String>> multiValueEntry : requestParams.entrySet()) {
+				for (String singleEntryValue : multiValueEntry.getValue()) {
+					builder.queryParam(multiValueEntry.getKey(), singleEntryValue);
+				}
+			}
+
+		} else if (value instanceof Map) {
+
+			Map<String, String> requestParams = (Map<String, String>) value;
+
+			for (Map.Entry<String, String> requestParamEntry : requestParams.entrySet()) {
+				builder.queryParam(requestParamEntry.getKey(), requestParamEntry.getValue());
+			}
+
+		} else if (value instanceof Collection) {
+
+			for (Object element : (Collection<?>) value) {
+				builder.queryParam(key, element);
+			}
+
+		} else {
+			builder.queryParam(key, parameter.asString());
+		}
+	}
+
+	/**
 	 * Custom extension of {@link AnnotatedParametersParameterAccessor} for {@link RequestParam} to allow {@literal null}
 	 * values handed in for optional request parameters.
 	 * 
@@ -189,7 +235,8 @@ public class ControllerLinkBuilderFactory implements MethodLinkBuilderFactory<Co
 		protected Object verifyParameterValue(MethodParameter parameter, Object value) {
 
 			RequestParam annotation = parameter.getParameterAnnotation(RequestParam.class);
-			return annotation.required() ? super.verifyParameterValue(parameter, value) : value;
+			return annotation.required() && annotation.defaultValue().equals(ValueConstants.DEFAULT_NONE) ? super
+					.verifyParameterValue(parameter, value) : value;
 		}
 	}
 }

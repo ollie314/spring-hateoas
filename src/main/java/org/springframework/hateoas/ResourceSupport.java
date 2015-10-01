@@ -1,5 +1,5 @@
 /*
- * Copyright 2012 the original author or authors.
+ * Copyright 2012-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,11 +16,15 @@
 package org.springframework.hateoas;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import javax.xml.bind.annotation.XmlElement;
 
 import org.springframework.util.Assert;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Base class for DTOs to collect links.
@@ -38,8 +42,7 @@ public class ResourceSupport implements Identifiable<Link> {
 	/**
 	 * Returns the {@link Link} with a rel of {@link Link#REL_SELF}.
 	 */
-	@org.codehaus.jackson.annotate.JsonIgnore
-	@com.fasterxml.jackson.annotation.JsonIgnore
+	@JsonIgnore
 	public Link getId() {
 		return getLink(Link.REL_SELF);
 	}
@@ -67,6 +70,16 @@ public class ResourceSupport implements Identifiable<Link> {
 	}
 
 	/**
+	 * Adds all given {@link Link}s to the resource.
+	 *
+	 * @param links must not be {@literal null}.
+	 */
+	public void add(Link... links) {
+		Assert.notNull(links, "Given links must not be null!");
+		add(Arrays.asList(links));
+	}
+
+	/**
 	 * Returns whether the resource contains {@link Link}s at all.
 	 * 
 	 * @return
@@ -91,8 +104,7 @@ public class ResourceSupport implements Identifiable<Link> {
 	 * @return
 	 */
 	@XmlElement(name = "link", namespace = Link.ATOM_NAMESPACE)
-	@org.codehaus.jackson.annotate.JsonProperty("links")
-	@com.fasterxml.jackson.annotation.JsonProperty("links")
+	@JsonProperty("links")
 	public List<Link> getLinks() {
 		return links;
 	}
@@ -141,7 +153,7 @@ public class ResourceSupport implements Identifiable<Link> {
 			return true;
 		}
 
-		if (!obj.getClass().equals(this.getClass())) {
+		if (obj == null || !obj.getClass().equals(this.getClass())) {
 			return false;
 		}
 

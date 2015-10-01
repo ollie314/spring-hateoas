@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2014 the original author or authors.
+ * Copyright 2013-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package org.springframework.hateoas.hal;
 
 import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.*;
+import static org.mockito.Mockito.*;
 
 import java.util.List;
 import java.util.Map;
@@ -24,43 +25,46 @@ import java.util.Map;
 import org.hamcrest.Matchers;
 import org.junit.Before;
 import org.junit.Test;
-import org.springframework.beans.BeanUtils;
 import org.springframework.hateoas.RelProvider;
-import org.springframework.hateoas.Resource;
+import org.springframework.hateoas.UriTemplate;
+import org.springframework.hateoas.core.EmbeddedWrapper;
+import org.springframework.hateoas.core.EmbeddedWrappers;
 import org.springframework.hateoas.core.EvoInflectorRelProvider;
 
 /**
  * Unit tests for {@link HalEmbeddedBuilder}.
- * 
+ *
  * @author Oliver Gierke
  * @author Dietrich Schulten
  */
 public class HalEmbeddedBuilderUnitTest {
 
 	RelProvider provider;
+	CurieProvider curieProvider;
 
 	@Before
 	public void setUp() {
 		provider = new EvoInflectorRelProvider();
+		curieProvider = new DefaultCurieProvider("curie", new UriTemplate("http://localhost/{rel}"));
 	}
 
 	@Test
 	public void rendersSingleElementsWithSingleEntityRel() {
 
-		Map<String, List<Object>> map = setUpBuilder("foo", 1L);
+		Map<String, Object> map = setUpBuilder(null, "foo", 1L);
 
-		assertThat(map.get("string"), Matchers.<List<Object>> allOf(hasSize(1), hasItem("foo")));
-		assertThat(map.get("long"), Matchers.<List<Object>> allOf(hasSize(1), hasItem(1L)));
+		assertThat(map.get("string"), is((Object) "foo"));
+		assertThat(map.get("long"), is((Object) 1L));
 	}
 
 	@Test
 	public void rendersMultipleElementsWithCollectionResourceRel() {
 
-		Map<String, List<Object>> map = setUpBuilder("foo", "bar", 1L);
+		Map<String, Object> map = setUpBuilder(null, "foo", "bar", 1L);
 
 		assertThat(map.containsKey("string"), is(false));
-		assertThat(map.get("strings"), Matchers.<List<Object>> allOf(hasSize(2), Matchers.<Object> hasItems("foo", "bar")));
-		assertThat(map.get("long"), Matchers.<List<Object>> allOf(hasSize(1), hasItem(1L)));
+		assertThat(map.get("long"), is((Object) 1L));
+		assertHasValues(map, "strings", "foo", "bar");
 	}
 
 	/**
@@ -69,25 +73,11 @@ public class HalEmbeddedBuilderUnitTest {
 	@Test
 	public void correctlyPilesUpResourcesInCollectionRel() {
 
-		Map<String, List<Object>> map = setUpBuilder("foo", "bar", "foobar", 1L);
+		Map<String, Object> map = setUpBuilder(null, "foo", "bar", "foobar", 1L);
 
 		assertThat(map.containsKey("string"), is(false));
-		assertThat(map.get("strings"),
-				Matchers.<List<Object>> allOf(hasSize(3), Matchers.<Object> hasItems("foo", "bar", "foobar")));
-		assertThat(map.get("long"), Matchers.<List<Object>> allOf(hasSize(1), hasItem(1L)));
-	}
-
-	/**
-	 * @see #81, #83
-	 */
-	@Test
-	public void addsNoEmbeddedsForResourceWithoutContent() {
-
-		Resource<?> resource = BeanUtils.instantiateClass(Resource.class);
-		HalEmbeddedBuilder halEmbeddedBuilder = new HalEmbeddedBuilder(provider, true);
-		halEmbeddedBuilder.add(resource);
-
-		assertThat(halEmbeddedBuilder.asMap().isEmpty(), is(true));
+		assertHasValues(map, "strings", "foo", "bar", "foobar");
+		assertThat(map.get("long"), is((Object) 1L));
 	}
 
 	/**
@@ -96,16 +86,106 @@ public class HalEmbeddedBuilderUnitTest {
 	@Test
 	public void forcesCollectionRelToBeUsedIfConfigured() {
 
-		HalEmbeddedBuilder builder = new HalEmbeddedBuilder(provider, true);
+		HalEmbeddedBuilder builder = new HalEmbeddedBuilder(provider, null, true);
 		builder.add("Sample");
 
 		assertThat(builder.asMap().get("string"), is(nullValue()));
-		assertThat(builder.asMap().get("strings"), hasItem("Sample"));
+		assertHasValues(builder.asMap(), "strings", "Sample");
 	}
 
-	private Map<String, List<Object>> setUpBuilder(Object... values) {
+	/**
+	 * @see #195
+	 */
+	@Test
+	public void doesNotPreferCollectionsIfRelAwareWasAdded() {
 
-		HalEmbeddedBuilder builder = new HalEmbeddedBuilder(provider, false);
+		EmbeddedWrappers wrappers = new EmbeddedWrappers(false);
+
+		HalEmbeddedBuilder builder = new HalEmbeddedBuilder(provider, null, true);
+		builder.add(wrappers.wrap("MyValue", "foo"));
+
+		assertThat(builder.asMap().get("foo"), is(instanceOf(String.class)));
+	}
+
+	/**
+	 * @see #195
+	 */
+	@Test(expected = IllegalArgumentException.class)
+	public void rejectsNullRelProvider() {
+		new HalEmbeddedBuilder(null, null, false);
+	}
+
+	/**
+	 * @see #229
+	 */
+	@Test
+	public void rendersSingleElementsWithSingleEntityRelWithCurieProvider() {
+
+		Map<String, Object> map = setUpBuilder(curieProvider, "foo", 1L);
+
+		assertThat(map.get("curie:string"), is((Object) "foo"));
+		assertThat(map.get("curie:long"), is((Object) 1L));
+	}
+
+	/**
+	 * @see #229
+	 */
+	@Test
+	public void rendersMultipleElementsWithCollectionResourceRelWithCurieProvider() {
+
+		Map<String, Object> map = setUpBuilder(curieProvider, "foo", "bar", 1L);
+
+		assertThat(map.containsKey("curie:string"), is(false));
+		assertThat(map.get("curie:long"), is((Object) 1L));
+		assertHasValues(map, "curie:strings", "foo", "bar");
+	}
+
+	/**
+	 * @see #229
+	 */
+	@Test
+	public void correctlyPilesUpResourcesInCollectionRelWithCurieprovider() {
+
+		Map<String, Object> map = setUpBuilder(curieProvider, "foo", "bar", "foobar", 1L);
+
+		assertThat(map.containsKey("curie:string"), is(false));
+		assertHasValues(map, "curie:strings", "foo", "bar", "foobar");
+		assertThat(map.get("curie:long"), is((Object) 1L));
+	}
+
+	/**
+	 * @see #229
+	 */
+	@Test
+	public void forcesCollectionRelToBeUsedIfConfiguredWithCurieProvider() {
+
+		HalEmbeddedBuilder builder = new HalEmbeddedBuilder(provider, curieProvider, true);
+		builder.add("Sample");
+
+		assertThat(builder.asMap().get("curie:string"), is(nullValue()));
+		assertHasValues(builder.asMap(), "curie:strings", "Sample");
+	}
+
+	/**
+	 * @see #286
+	 */
+	@Test(expected = IllegalStateException.class)
+	public void rejectsInvalidEmbeddedWrapper() {
+		new HalEmbeddedBuilder(provider, curieProvider, false).add(mock(EmbeddedWrapper.class));
+	}
+
+	@SuppressWarnings("unchecked")
+	private static void assertHasValues(Map<String, Object> source, String rel, Object... values) {
+
+		Object value = source.get(rel);
+
+		assertThat(value, is(instanceOf(List.class)));
+		assertThat((List<Object>) value, Matchers.<List<Object>> allOf(hasSize(values.length), hasItems(values)));
+	}
+
+	private Map<String, Object> setUpBuilder(CurieProvider curieProvider, Object... values) {
+
+		HalEmbeddedBuilder builder = new HalEmbeddedBuilder(provider, curieProvider, false);
 
 		for (Object value : values) {
 			builder.add(value);

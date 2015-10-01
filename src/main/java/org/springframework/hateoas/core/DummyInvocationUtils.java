@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2013 the original author or authors.
+ * Copyright 2012-2014 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,13 +20,13 @@ import java.util.Arrays;
 import java.util.Iterator;
 
 import org.aopalliance.intercept.MethodInterceptor;
-import org.objenesis.ObjenesisStd;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.aop.target.EmptyTargetSource;
 import org.springframework.cglib.proxy.Callback;
 import org.springframework.cglib.proxy.Enhancer;
 import org.springframework.cglib.proxy.Factory;
 import org.springframework.cglib.proxy.MethodProxy;
+import org.springframework.objenesis.ObjenesisStd;
 import org.springframework.util.Assert;
 import org.springframework.util.ReflectionUtils;
 
@@ -58,6 +58,7 @@ public class DummyInvocationUtils {
 		private static final Method GET_INVOCATIONS;
 		private static final Method GET_OBJECT_PARAMETERS;
 
+		private final Class<?> targetType;
 		private final Object[] objectParameters;
 		private MethodInvocation invocation;
 
@@ -72,7 +73,9 @@ public class DummyInvocationUtils {
 		 * 
 		 * @param parameters
 		 */
-		public InvocationRecordingMethodInterceptor(Object... parameters) {
+		public InvocationRecordingMethodInterceptor(Class<?> targetType, Object... parameters) {
+
+			this.targetType = targetType;
 			this.objectParameters = parameters.clone();
 		}
 
@@ -80,6 +83,7 @@ public class DummyInvocationUtils {
 		 * (non-Javadoc)
 		 * @see org.springframework.cglib.proxy.MethodInterceptor#intercept(java.lang.Object, java.lang.reflect.Method, java.lang.Object[], org.springframework.cglib.proxy.MethodProxy)
 		 */
+		@Override
 		public Object intercept(Object obj, Method method, Object[] args, MethodProxy proxy) {
 
 			if (GET_INVOCATIONS.equals(method)) {
@@ -90,10 +94,10 @@ public class DummyInvocationUtils {
 				return ReflectionUtils.invokeMethod(method, obj, args);
 			}
 
-			this.invocation = new SimpleMethodInvocation(method, args);
+			this.invocation = new SimpleMethodInvocation(targetType, method, args);
 
 			Class<?> returnType = method.getReturnType();
-			return returnType.cast(getProxyWithInterceptor(returnType, this));
+			return returnType.cast(getProxyWithInterceptor(returnType, this, obj.getClass().getClassLoader()));
 		}
 
 		/* 
@@ -140,12 +144,13 @@ public class DummyInvocationUtils {
 
 		Assert.notNull(type, "Given type must not be null!");
 
-		InvocationRecordingMethodInterceptor interceptor = new InvocationRecordingMethodInterceptor(parameters);
-		return getProxyWithInterceptor(type, interceptor);
+		InvocationRecordingMethodInterceptor interceptor = new InvocationRecordingMethodInterceptor(type, parameters);
+		return getProxyWithInterceptor(type, interceptor, type.getClassLoader());
 	}
 
 	@SuppressWarnings("unchecked")
-	private static <T> T getProxyWithInterceptor(Class<?> type, InvocationRecordingMethodInterceptor interceptor) {
+	private static <T> T getProxyWithInterceptor(Class<?> type, InvocationRecordingMethodInterceptor interceptor,
+			ClassLoader classLoader) {
 
 		if (type.isInterface()) {
 
@@ -161,6 +166,7 @@ public class DummyInvocationUtils {
 		enhancer.setSuperclass(type);
 		enhancer.setInterfaces(new Class<?>[] { LastInvocationAware.class });
 		enhancer.setCallbackType(org.springframework.cglib.proxy.MethodInterceptor.class);
+		enhancer.setClassLoader(classLoader);
 
 		Factory factory = (Factory) OBJENESIS.newInstance(enhancer.createClass());
 		factory.setCallbacks(new Callback[] { interceptor });
@@ -172,10 +178,13 @@ public class DummyInvocationUtils {
 		Object[] getArguments();
 
 		Method getMethod();
+
+		Class<?> getTargetType();
 	}
 
 	static class SimpleMethodInvocation implements MethodInvocation {
 
+		private final Class<?> targetType;
 		private final Method method;
 		private final Object[] arguments;
 
@@ -185,9 +194,20 @@ public class DummyInvocationUtils {
 		 * @param method
 		 * @param arguments
 		 */
-		private SimpleMethodInvocation(Method method, Object[] arguments) {
+		private SimpleMethodInvocation(Class<?> targetType, Method method, Object[] arguments) {
+
+			this.targetType = targetType;
 			this.arguments = arguments;
 			this.method = method;
+		}
+
+		/* 
+		 * (non-Javadoc)
+		 * @see org.springframework.hateoas.core.DummyInvocationUtils.MethodInvocation#getTargetType()
+		 */
+		@Override
+		public Class<?> getTargetType() {
+			return targetType;
 		}
 
 		/* 

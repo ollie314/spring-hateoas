@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2013 the original author or authors.
+ * Copyright 2012-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,15 +15,18 @@
  */
 package org.springframework.hateoas.mvc;
 
+import static org.hamcrest.MatcherAssert.*;
 import static org.hamcrest.Matchers.*;
-import static org.junit.Assert.*;
 import static org.springframework.hateoas.mvc.ControllerLinkBuilder.*;
 
+import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 
 import org.hamcrest.Matchers;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
 import org.mockito.Mockito;
 import org.springframework.hateoas.Identifiable;
 import org.springframework.hateoas.Link;
@@ -34,6 +37,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -42,8 +46,13 @@ import org.springframework.web.util.UriComponentsBuilder;
  * 
  * @author Oliver Gierke
  * @author Dietrich Schulten
+ * @author Kamill Sokol
+ * @author Oemer Yildiz
+ * @author Greg Turnquist
  */
 public class ControllerLinkBuilderUnitTest extends TestUtils {
+
+	public @Rule ExpectedException exception = ExpectedException.none();
 
 	@Test
 	public void createsLinkToControllerRoot() {
@@ -295,6 +304,159 @@ public class ControllerLinkBuilderUnitTest extends TestUtils {
 		linkTo(methodOn(ControllerWithMethods.class).methodWithRequestParam(null));
 	}
 
+	/**
+	 * @see #170
+	 */
+	@Test
+	public void usesForwardedPortFromHeader() {
+
+		request.addHeader("X-Forwarded-Host", "foobarhost");
+		request.addHeader("X-Forwarded-Port", "9090");
+		request.setServerPort(8080);
+
+		Link link = linkTo(PersonControllerImpl.class).withSelfRel();
+
+		assertThat(link.getHref(), startsWith("http://foobarhost:9090/"));
+	}
+
+	/**
+	 * @see #170
+	 */
+	@Test
+	public void usesForwardedHostFromHeaderWithDefaultPort() {
+
+		request.addHeader("X-Forwarded-Host", "foobarhost");
+		request.setServerPort(8080);
+
+		Link link = linkTo(PersonControllerImpl.class).withSelfRel();
+		assertThat(link.getHref(), startsWith("http://foobarhost/"));
+	}
+
+	/**
+	 * @see #114
+	 */
+	@Test
+	public void discoversParentClassTypeMappingForInvocation() {
+
+		Link link = linkTo(methodOn(ChildController.class).myMethod()).withSelfRel();
+		assertThat(link.getHref(), endsWith("/parent/child"));
+	}
+
+	/**
+	 * @see #114
+	 */
+	@Test
+	public void includesTypeMappingFromChildClass() {
+
+		Link link = linkTo(methodOn(ChildWithTypeMapping.class).myMethod()).withSelfRel();
+		assertThat(link.getHref(), endsWith("/child/parent"));
+	}
+
+	/**
+	 * @see #96
+	 */
+	@Test
+	public void linksToMethodWithPathVariableContainingBlank() {
+
+		Link link = linkTo(methodOn(ControllerWithMethods.class).methodWithPathVariable("with blank")).withSelfRel();
+		assertThat(link.getRel(), is(Link.REL_SELF));
+		assertThat(link.getHref(), endsWith("/something/with%20blank/foo"));
+	}
+
+	/**
+	 * @see #192
+	 */
+	@Test
+	public void usesRootMappingOfTargetClassForMethodsOfParentClass() {
+
+		Link link = linkTo(methodOn(ChildControllerWithRootMapping.class).someEmptyMappedMethod()).withSelfRel();
+		assertThat(link.getHref(), endsWith("/root"));
+	}
+
+	/**
+	 * @see #192
+	 */
+	@Test
+	public void usesRootMappingOfTargetClassForMethodsOfParen() throws Exception {
+
+		Method method = ParentControllerWithoutRootMapping.class.getMethod("someEmptyMappedMethod");
+
+		Link link = linkTo(ChildControllerWithRootMapping.class, method).withSelfRel();
+		assertThat(link.getHref(), endsWith("/root"));
+	}
+
+	/**
+	 * @see #257, #107
+	 */
+	@Test
+	public void usesXForwardedProtoHeaderAsLinkSchema() {
+
+		for (String proto : Arrays.asList("http", "https")) {
+
+			setUp();
+			request.addHeader("X-Forwarded-Proto", proto);
+
+			Link link = linkTo(PersonControllerImpl.class).withSelfRel();
+			assertThat(link.getHref(), startsWith(proto + "://"));
+		}
+	}
+
+	/**
+	 * @see #257, #107
+	 */
+	@Test
+	public void usesProtoValueFromForwardedHeaderAsLinkSchema() {
+
+		for (String proto : Arrays.asList("http", "https")) {
+
+			setUp();
+			request.addHeader("Forwarded", new String[] { "proto=" + proto });
+
+			Link link = linkTo(PersonControllerImpl.class).withSelfRel();
+			assertThat(link.getHref(), startsWith(proto.concat("://")));
+		}
+	}
+
+	/**
+	 * @see #257, #107
+	 */
+	@Test
+	public void favorsStandardForwardHeaderOverXForwardedProto() {
+
+		request.addHeader("X-Forwarded-Proto", "foo");
+		request.addHeader(ForwardedHeader.NAME, "proto=bar");
+
+		Link link = linkTo(PersonControllerImpl.class).withSelfRel();
+		assertThat(link.getHref(), startsWith("bar://"));
+	}
+
+	/**
+	 * @see #331
+	 */
+	@Test
+	public void linksToMethodWithRequestParamImplicitlySetToFalse() {
+
+		Link link = linkTo(methodOn(ControllerWithMethods.class).methodForOptionalSizeWithDefaultValue(null)).withSelfRel();
+
+		assertThat(link.getHref(), endsWith("/bar"));
+	}
+
+	/**
+	 * @see #342
+	 */
+	@Test
+	public void mentionsRequiredUsageWithinWebRequestInException() {
+
+		exception.expect(IllegalStateException.class);
+		exception.expectMessage("request");
+		exception.expectMessage("Spring MVC");
+
+		RequestContextHolder.setRequestAttributes(null);
+
+		linkTo(methodOn(ControllerLinkBuilderUnitTest.PersonsAddressesController.class, 15).getAddressesForCountry("DE"))
+				.withSelfRel();
+	}
+
 	private static UriComponents toComponents(Link link) {
 		return UriComponentsBuilder.fromUriString(link.getHref()).build();
 	}
@@ -310,13 +472,9 @@ public class ControllerLinkBuilderUnitTest extends TestUtils {
 	}
 
 	@RequestMapping("/people")
-	interface PersonController {
+	interface PersonController {}
 
-	}
-
-	class PersonControllerImpl implements PersonController {
-
-	}
+	class PersonControllerImpl implements PersonController {}
 
 	@RequestMapping("/people/{id}/addresses")
 	static class PersonsAddressesController {
@@ -370,5 +528,39 @@ public class ControllerLinkBuilderUnitTest extends TestUtils {
 		HttpEntity<Void> methodForOptionalNextPage(@RequestParam(required = false) Integer offset) {
 			return null;
 		}
+
+		@RequestMapping(value = "/bar")
+		HttpEntity<Void> methodForOptionalSizeWithDefaultValue(@RequestParam(defaultValue = "10") Integer size) {
+			return null;
+		}
+	}
+
+	@RequestMapping("/parent")
+	interface ParentController {}
+
+	interface ChildController extends ParentController {
+
+		@RequestMapping("/child")
+		Object myMethod();
+	}
+
+	interface ParentWithMethod {
+
+		@RequestMapping("/parent")
+		Object myMethod();
+	}
+
+	@RequestMapping("/child")
+	interface ChildWithTypeMapping extends ParentWithMethod {}
+
+	interface ParentControllerWithoutRootMapping {
+
+		@RequestMapping
+		Object someEmptyMappedMethod();
+	}
+
+	@RequestMapping("/root")
+	interface ChildControllerWithRootMapping extends ParentControllerWithoutRootMapping {
+
 	}
 }

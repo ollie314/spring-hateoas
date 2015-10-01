@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2014 the original author or authors.
+ * Copyright 2013-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
  */
 package org.springframework.hateoas;
 
-import static org.hamcrest.CoreMatchers.*;
+import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.*;
 
 import java.io.FileInputStream;
@@ -31,17 +31,15 @@ import javax.xml.bind.JAXBContext;
 import javax.xml.bind.Marshaller;
 import javax.xml.bind.Unmarshaller;
 
-import org.codehaus.jackson.map.ObjectMapper;
-import org.codehaus.jackson.map.SerializationConfig.Feature;
 import org.custommonkey.xmlunit.Diff;
 import org.junit.Before;
 import org.junit.Test;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.hateoas.VndErrors.VndError;
 import org.springframework.hateoas.core.EvoInflectorRelProvider;
-import org.springframework.hateoas.hal.Jackson1HalModule;
 import org.springframework.hateoas.hal.Jackson2HalModule;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 
 /**
@@ -49,11 +47,9 @@ import com.fasterxml.jackson.databind.SerializationFeature;
  * 
  * @author Oliver Gierke
  */
-@SuppressWarnings("deprecation")
 public class VndErrorsMarshallingTest {
 
-	ObjectMapper jackson1Mapper;
-	com.fasterxml.jackson.databind.ObjectMapper jackson2Mapper;
+	ObjectMapper jackson2Mapper;
 	Marshaller marshaller;
 	Unmarshaller unmarshaller;
 
@@ -74,13 +70,9 @@ public class VndErrorsMarshallingTest {
 	@Before
 	public void setUp() throws Exception {
 
-		jackson1Mapper = new ObjectMapper();
-		jackson1Mapper.registerModule(new Jackson1HalModule());
-		jackson1Mapper.configure(Feature.INDENT_OUTPUT, true);
-
 		jackson2Mapper = new com.fasterxml.jackson.databind.ObjectMapper();
 		jackson2Mapper.registerModule(new Jackson2HalModule());
-		jackson2Mapper.setHandlerInstantiator(new Jackson2HalModule.HalHandlerInstantiator(relProvider, null));
+		jackson2Mapper.setHandlerInstantiator(new Jackson2HalModule.HalHandlerInstantiator(relProvider, null, null));
 		jackson2Mapper.configure(SerializationFeature.INDENT_OUTPUT, true);
 
 		JAXBContext context = JAXBContext.newInstance(VndErrors.class);
@@ -96,16 +88,8 @@ public class VndErrorsMarshallingTest {
 	 * @see #62
 	 */
 	@Test
-	public void jackson1Marshalling() throws Exception {
-		assertThat(jackson1Mapper.writeValueAsString(errors), is(jsonReference));
-	}
-
-	/**
-	 * @see #62
-	 */
-	@Test
 	public void jackson2Marshalling() throws Exception {
-		assertThat(jackson2Mapper.writeValueAsString(errors), is(json2Reference));
+		assertThat(jackson2Mapper.writeValueAsString(errors), equalToIgnoringWhiteSpace(json2Reference));
 	}
 
 	/**
@@ -118,15 +102,6 @@ public class VndErrorsMarshallingTest {
 		marshaller.marshal(errors, writer);
 
 		assertThat(new Diff(xmlReference, writer.toString()).similar(), is(true));
-	}
-
-	/**
-	 * @see #62, #93, #94
-	 */
-	@Test
-	public void jackson1UnMarshalling() throws Exception {
-		VndErrors actual = jackson1Mapper.readValue(jsonReference, VndErrors.class);
-		assertThat(actual, is(errors));
 	}
 
 	/**

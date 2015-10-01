@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2013 the original author or authors.
+ * Copyright 2012-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
  */
 package org.springframework.hateoas.mvc;
 
+import static org.springframework.util.StringUtils.*;
+
 import java.lang.reflect.Method;
 import java.net.URI;
 
@@ -26,12 +28,12 @@ import org.springframework.hateoas.core.DummyInvocationUtils;
 import org.springframework.hateoas.core.LinkBuilderSupport;
 import org.springframework.hateoas.core.MappingDiscoverer;
 import org.springframework.util.Assert;
-import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
+import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.util.UriTemplate;
 
@@ -39,9 +41,12 @@ import org.springframework.web.util.UriTemplate;
  * Builder to ease building {@link Link} instances pointing to Spring MVC controllers.
  * 
  * @author Oliver Gierke
+ * @author Kamill Sokol
+ * @author Greg Turnquist
  */
 public class ControllerLinkBuilder extends LinkBuilderSupport<ControllerLinkBuilder> {
 
+	private static final String REQUEST_ATTRIBUTES_MISSING = "Could not find current request via RequestContextHolder. Is this being called from a Spring MVC handler?";
 	private static final MappingDiscoverer DISCOVERER = new AnnotationMappingDiscoverer(RequestMapping.class);
 	private static final ControllerLinkBuilderFactory FACTORY = new ControllerLinkBuilderFactory();
 
@@ -79,15 +84,31 @@ public class ControllerLinkBuilder extends LinkBuilderSupport<ControllerLinkBuil
 
 		ControllerLinkBuilder builder = new ControllerLinkBuilder(getBuilder());
 		String mapping = DISCOVERER.getMapping(controller);
-		UriTemplate template = new UriTemplate(mapping == null ? "/" : mapping);
 
-		return builder.slash(template.expand(parameters));
+		UriComponents uriComponents = UriComponentsBuilder.fromUriString(mapping == null ? "/" : mapping).build();
+		UriComponents expandedComponents = uriComponents.expand(parameters);
+
+		return builder.slash(expandedComponents);
 	}
 
+	/*
+	 * @see org.springframework.hateoas.MethodLinkBuilderFactory#linkTo(Method, Object...)
+	 */
 	public static ControllerLinkBuilder linkTo(Method method, Object... parameters) {
+		return linkTo(method.getDeclaringClass(), method, parameters);
+	}
 
-		UriTemplate template = new UriTemplate(DISCOVERER.getMapping(method));
+	/*
+	 * @see org.springframework.hateoas.MethodLinkBuilderFactory#linkTo(Class<?>, Method, Object...)
+	 */
+	public static ControllerLinkBuilder linkTo(Class<?> controller, Method method, Object... parameters) {
+
+		Assert.notNull(controller, "Controller type must not be null!");
+		Assert.notNull(method, "Method must not be null!");
+
+		UriTemplate template = new UriTemplate(DISCOVERER.getMapping(controller, method));
 		URI uri = template.expand(parameters);
+
 		return new ControllerLinkBuilder(getBuilder()).slash(uri);
 	}
 
@@ -168,30 +189,42 @@ public class ControllerLinkBuilder extends LinkBuilderSupport<ControllerLinkBuil
 		HttpServletRequest request = getCurrentRequest();
 		ServletUriComponentsBuilder builder = ServletUriComponentsBuilder.fromServletMapping(request);
 
+		ForwardedHeader forwarded = ForwardedHeader.of(request.getHeader(ForwardedHeader.NAME));
+		String proto = hasText(forwarded.getProto()) ? forwarded.getProto() : request.getHeader("X-Forwarded-Proto");
 		String forwardedSsl = request.getHeader("X-Forwarded-Ssl");
 
-		if (StringUtils.hasText(forwardedSsl) && forwardedSsl.equalsIgnoreCase("on")) {
+		if (hasText(proto)) {
+			builder.scheme(proto);
+		} else if (hasText(forwardedSsl) && forwardedSsl.equalsIgnoreCase("on")) {
 			builder.scheme("https");
 		}
 
-		String header = request.getHeader("X-Forwarded-Host");
+		String host = forwarded.getHost();
+		host = hasText(host) ? host : request.getHeader("X-Forwarded-Host");
 
-		if (!StringUtils.hasText(header)) {
+		if (!hasText(host)) {
 			return builder;
 		}
 
-		String[] hosts = StringUtils.commaDelimitedListToStringArray(header);
+		String[] hosts = commaDelimitedListToStringArray(host);
 		String hostToUse = hosts[0];
 
 		if (hostToUse.contains(":")) {
 
-			String[] hostAndPort = StringUtils.split(hostToUse, ":");
+			String[] hostAndPort = split(hostToUse, ":");
 
 			builder.host(hostAndPort[0]);
 			builder.port(Integer.parseInt(hostAndPort[1]));
 
 		} else {
 			builder.host(hostToUse);
+			builder.port(-1); // reset port if it was forwarded from default port
+		}
+
+		String port = request.getHeader("X-Forwarded-Port");
+
+		if (hasText(port)) {
+			builder.port(Integer.parseInt(port));
 		}
 
 		return builder;
@@ -206,7 +239,7 @@ public class ControllerLinkBuilder extends LinkBuilderSupport<ControllerLinkBuil
 	private static HttpServletRequest getCurrentRequest() {
 
 		RequestAttributes requestAttributes = RequestContextHolder.getRequestAttributes();
-		Assert.state(requestAttributes != null, "Could not find current request via RequestContextHolder");
+		Assert.state(requestAttributes != null, REQUEST_ATTRIBUTES_MISSING);
 		Assert.isInstanceOf(ServletRequestAttributes.class, requestAttributes);
 		HttpServletRequest servletRequest = ((ServletRequestAttributes) requestAttributes).getRequest();
 		Assert.state(servletRequest != null, "Could not find current HttpServletRequest");

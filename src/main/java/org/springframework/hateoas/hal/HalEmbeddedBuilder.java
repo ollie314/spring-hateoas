@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2014 the original author or authors.
+ * Copyright 2013-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,15 +16,18 @@
 package org.springframework.hateoas.hal;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.springframework.aop.support.AopUtils;
 import org.springframework.hateoas.RelProvider;
 import org.springframework.hateoas.Resource;
-import org.springframework.hateoas.core.ObjectUtils;
+import org.springframework.hateoas.core.EmbeddedWrapper;
+import org.springframework.hateoas.core.EmbeddedWrappers;
+import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
 
 /**
  * Builder class that allows collecting objects under the relation types defined for the objects but moving from the
@@ -36,65 +39,95 @@ import org.springframework.hateoas.core.ObjectUtils;
 class HalEmbeddedBuilder {
 
 	private static final String DEFAULT_REL = "content";
+	private static final String INVALID_EMBEDDED_WRAPPER = "Embedded wrapper %s returned null for both the static rel and the rel target type! Make sure one of the two returns a non-null value!";
 
-	private final Map<String, List<Object>> embeddeds = new HashMap<String, List<Object>>();
+	private final Map<String, Object> embeddeds = new HashMap<String, Object>();
 	private final RelProvider provider;
-	private final boolean enforceCollections;
+	private final CurieProvider curieProvider;
+	private final EmbeddedWrappers wrappers;
 
 	/**
-	 * Creates a new {@link HalEmbeddedBuilder} using the given {@link RelProvider}.
+	 * Creates a new {@link HalEmbeddedBuilder} using the given {@link RelProvider} and prefer collection rels flag.
 	 * 
 	 * @param provider can be {@literal null}.
+	 * @param preferCollectionRels whether to prefer to ask the provider for collection rels.
 	 */
-	public HalEmbeddedBuilder(RelProvider provider, boolean enforceCollections) {
+	public HalEmbeddedBuilder(RelProvider provider, CurieProvider curieProvider, boolean preferCollectionRels) {
+
+		Assert.notNull(provider, "Relprovider must not be null!");
+
 		this.provider = provider;
-		this.enforceCollections = enforceCollections;
+		this.curieProvider = curieProvider;
+		this.wrappers = new EmbeddedWrappers(preferCollectionRels);
 	}
 
 	/**
 	 * Adds the given value to the embeddeds. Will skip doing so if the value is {@literal null} or the content of a
 	 * {@link Resource} is {@literal null}.
 	 * 
-	 * @param value
+	 * @param source can be {@literal null}.
 	 */
-	public void add(Object value) {
+	public void add(Object source) {
 
-		Object unwrapped = ObjectUtils.getResourceType(value);
+		EmbeddedWrapper wrapper = wrappers.wrap(source);
 
-		if (unwrapped == null) {
+		if (wrapper == null) {
 			return;
 		}
 
-		String rel = getDefaultedRelFor(unwrapped, true);
+		String collectionRel = getDefaultedRelFor(wrapper, true);
+		String collectionOrItemRel = collectionRel;
 
-		if (!embeddeds.containsKey(rel)) {
-			rel = getDefaultedRelFor(unwrapped, enforceCollections);
+		if (!embeddeds.containsKey(collectionRel)) {
+			collectionOrItemRel = getDefaultedRelFor(wrapper, wrapper.isCollectionValue());
 		}
 
-		List<Object> currentValue = embeddeds.get(rel);
+		Object currentValue = embeddeds.get(collectionOrItemRel);
+		Object value = wrapper.getValue();
 
-		if (currentValue == null) {
-			ArrayList<Object> arrayList = new ArrayList<Object>();
-			arrayList.add(value);
-			embeddeds.put(rel, arrayList);
-		} else if (currentValue.size() == 1) {
-			currentValue.add(value);
-			embeddeds.remove(rel);
-			embeddeds.put(getDefaultedRelFor(unwrapped, true), currentValue);
-		} else {
-			currentValue.add(value);
+		if (currentValue == null && !wrapper.isCollectionValue()) {
+			embeddeds.put(collectionOrItemRel, value);
+			return;
 		}
+
+		List<Object> list = new ArrayList<Object>();
+		list.addAll(asCollection(currentValue));
+		list.addAll(asCollection(wrapper.getValue()));
+
+		embeddeds.remove(collectionOrItemRel);
+		embeddeds.put(collectionRel, list);
 	}
 
-	private String getDefaultedRelFor(Object value, boolean forCollection) {
+	@SuppressWarnings("unchecked")
+	private Collection<Object> asCollection(Object source) {
+		return source instanceof Collection ? (Collection<Object>) source : source == null ? Collections.emptySet()
+				: Collections.singleton(source);
+	}
+
+	private String getDefaultedRelFor(EmbeddedWrapper wrapper, boolean forCollection) {
+
+		String valueRel = wrapper.getRel();
+
+		if (StringUtils.hasText(valueRel)) {
+			return valueRel;
+		}
 
 		if (provider == null) {
 			return DEFAULT_REL;
 		}
 
-		Class<?> type = AopUtils.getTargetClass(value);
+		Class<?> type = wrapper.getRelTargetType();
+
+		if (type == null) {
+			throw new IllegalStateException(String.format(INVALID_EMBEDDED_WRAPPER, wrapper));
+		}
 
 		String rel = forCollection ? provider.getCollectionResourceRelFor(type) : provider.getItemResourceRelFor(type);
+
+		if (curieProvider != null) {
+			rel = curieProvider.getNamespacedRelFor(rel);
+		}
+
 		return rel == null ? DEFAULT_REL : rel;
 	}
 
@@ -103,7 +136,7 @@ class HalEmbeddedBuilder {
 	 * 
 	 * @return
 	 */
-	public Map<String, List<Object>> asMap() {
+	public Map<String, Object> asMap() {
 		return Collections.unmodifiableMap(embeddeds);
 	}
 }
