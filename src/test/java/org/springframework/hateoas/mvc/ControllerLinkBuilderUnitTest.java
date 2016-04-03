@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2015 the original author or authors.
+ * Copyright 2012-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -49,6 +49,7 @@ import org.springframework.web.util.UriComponentsBuilder;
  * @author Kamill Sokol
  * @author Oemer Yildiz
  * @author Greg Turnquist
+ * @author Kevin Conaway
  */
 public class ControllerLinkBuilderUnitTest extends TestUtils {
 
@@ -97,9 +98,12 @@ public class ControllerLinkBuilderUnitTest extends TestUtils {
 		assertThat(link.getHref(), endsWith("/people"));
 	}
 
-	@Test(expected = IllegalStateException.class)
-	public void rejectsControllerWithMultipleMappings() {
-		linkTo(InvalidController.class);
+	/**
+	 * @see #186
+	 */
+	@Test
+	public void usesFirstMappingInCaseMultipleOnesAreDefined() {
+		assertThat(linkTo(InvalidController.class).withSelfRel().getHref(), endsWith("/persons"));
 	}
 
 	@Test
@@ -231,7 +235,7 @@ public class ControllerLinkBuilderUnitTest extends TestUtils {
 
 		Link link = linkTo(
 				methodOn(ControllerWithMethods.class).methodWithMultiValueRequestParams("1", Arrays.asList(3, 7), 5))
-				.withSelfRel();
+						.withSelfRel();
 
 		UriComponents components = toComponents(link);
 		assertThat(components.getPath(), is("/something/1/foo"));
@@ -455,6 +459,18 @@ public class ControllerLinkBuilderUnitTest extends TestUtils {
 
 		linkTo(methodOn(ControllerLinkBuilderUnitTest.PersonsAddressesController.class, 15).getAddressesForCountry("DE"))
 				.withSelfRel();
+	}
+
+	/**
+	 * @see #398
+	 */
+	@Test
+	public void encodesRequestParameterWithSpecialValue() {
+
+		Link link = linkTo(methodOn(ControllerWithMethods.class).methodWithRequestParam("Spring#\n")).withSelfRel();
+
+		assertThat(link.getRel(), is(Link.REL_SELF));
+		assertThat(link.getHref(), endsWith("/something/foo?id=Spring%23%0A"));
 	}
 
 	private static UriComponents toComponents(Link link) {
